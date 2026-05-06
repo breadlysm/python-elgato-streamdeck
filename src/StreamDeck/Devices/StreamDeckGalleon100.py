@@ -10,10 +10,6 @@
 #
 # USB VID: 0x1b1c (Corsair), PID: 0x2b18
 # Hardware: 12 keys (4 rows x 3 cols), 2 rotary dials, 1 small info screen
-#
-# Protocol details marked TODO below were derived by analogy with the
-# Stream Deck Plus/Studio and must be verified via HID capture before this
-# driver can be considered complete.  See CONTRIBUTING for capture instructions.
 
 from .StreamDeck import ControlType, DialEventType, StreamDeck
 from ..ImageHelpers import PILHelper
@@ -46,11 +42,9 @@ class StreamDeckGalleon100(StreamDeck):
     DECK_TYPE = "Corsair Galleon 100 SD"
     DECK_VISUAL = True
 
-    # TODO: verify screen dimensions via HID capture.  Tom's Hardware reports the
-    # total display panel as 720x180; the strip screen between the dials may be a
-    # subset of that.  Placeholder mirrors the Neo's info strip until confirmed.
-    SCREEN_PIXEL_WIDTH = 248
-    SCREEN_PIXEL_HEIGHT = 58
+    # Screen dimensions confirmed from JPEG SOF0 marker in HID capture.
+    SCREEN_PIXEL_WIDTH = 352
+    SCREEN_PIXEL_HEIGHT = 368
     SCREEN_IMAGE_FORMAT = "JPEG"
     SCREEN_FLIP = (False, False)
     SCREEN_ROTATION = 0
@@ -58,7 +52,7 @@ class StreamDeckGalleon100(StreamDeck):
     _IMG_PACKET_LEN = 1024
     _KEY_PACKET_HEADER = 8
     _KEY_PACKET_PAYLOAD_LEN = _IMG_PACKET_LEN - _KEY_PACKET_HEADER
-    _SCREEN_PACKET_HEADER = 8
+    _SCREEN_PACKET_HEADER = 16
     _SCREEN_PACKET_PAYLOAD_LEN = _IMG_PACKET_LEN - _SCREEN_PACKET_HEADER
 
     _DIAL_EVENT_TRANSFORM = {
@@ -73,24 +67,20 @@ class StreamDeckGalleon100(StreamDeck):
         )
 
     def _reset_key_stream(self):
-        # TODO: verify reset command byte — 0x02 matches Plus/Studio/Neo.
         payload = bytearray(self._IMG_PACKET_LEN)
         payload[0] = 0x02
         self.device.write(payload)
 
     def reset(self):
-        # TODO: verify reset feature report bytes via HID capture.
         payload = bytearray(32)
         payload[0:2] = [0x03, 0x02]
         self.device.write_feature(payload)
 
     def _read_control_states(self):
         # Packet layout (512 bytes): [report_id, event_type, pad, pad, data...]
-        # Key event (event_type=0x00): key states at bytes 4..15 (12 keys).
-        #   The device reports 13 positions (bytes 4..16); byte 16 likely maps
-        #   to the touch strip and is ignored here.
-        # Dial event (event_type=0x03): sub_type at byte 4 (0x01=turn, 0x00=push),
-        #   left dial at byte 5, right dial at byte 6.
+        # Key event (event_type=0x00): key states at bytes 3..14 (12 keys).
+        # Dial event (event_type=0x03): sub_type at byte 3 (0x01=turn, 0x00=push),
+        #   left dial at byte 4, right dial at byte 5.
         states = self.device.read(512)
 
         if states is None:
@@ -132,13 +122,19 @@ class StreamDeckGalleon100(StreamDeck):
         self.device.write_feature(payload)
 
     def get_serial_number(self):
-        # TODO: verify report ID (0x06) and string offset via HID capture.
-        serial = self.device.read_feature(0x06, 32)
+        # Write command 0x27 via SET_REPORT, then read response via GET_REPORT.
+        request = bytearray(32)
+        request[0:2] = [0x03, 0x27]
+        self.device.write_feature(request)
+        serial = self.device.read_feature(0x03, 32)
         return self._extract_string(serial[2:])
 
     def get_firmware_version(self):
-        # TODO: verify report ID (0x05) and string offset via HID capture.
-        version = self.device.read_feature(0x05, 32)
+        # Write command 0x05 via SET_REPORT, then read response via GET_REPORT.
+        request = bytearray(32)
+        request[0:6] = [0x03, 0x05, 0x00, 0x00, 0x00, 0x02]
+        self.device.write_feature(request)
+        version = self.device.read_feature(0x03, 32)
         return self._extract_string(version[6:])
 
     def set_key_image(self, key, image):
@@ -172,8 +168,10 @@ class StreamDeckGalleon100(StreamDeck):
             page_number += 1
 
     def set_screen_image(self, image):
-        # TODO: verify screen write command byte (0x0b) and header layout via HID capture.
-        # TODO: verify screen dimensions (SCREEN_PIXEL_WIDTH/HEIGHT) via HID capture.
+        # Header layout (16 bytes), confirmed from HID capture:
+        #   [0x02, 0x0c, 0x0e, 0x00, total_pages_lo, total_pages_hi,
+        #    width_lo, width_hi, height_lo, height_hi,
+        #    0x00, is_last, page_lo, page_hi, len_lo, len_hi]
         if not image:
             image = bytes(
                 PILHelper.to_native_format(
@@ -185,6 +183,8 @@ class StreamDeckGalleon100(StreamDeck):
 
         image = bytes(image)
 
+        total_pages = -(-len(image) // self._SCREEN_PACKET_PAYLOAD_LEN)  # ceil div
+
         page_number = 0
         bytes_remaining = len(image)
         while bytes_remaining > 0:
@@ -193,13 +193,21 @@ class StreamDeckGalleon100(StreamDeck):
 
             header = [
                 0x02,
-                0x0b,
+                0x0c,
+                0x0e,
+                0x00,
+                total_pages & 0xff,
+                (total_pages >> 8) & 0xff,
+                self.SCREEN_PIXEL_WIDTH & 0xff,
+                (self.SCREEN_PIXEL_WIDTH >> 8) & 0xff,
+                self.SCREEN_PIXEL_HEIGHT & 0xff,
+                (self.SCREEN_PIXEL_HEIGHT >> 8) & 0xff,
                 0x00,
                 0x01 if this_length == bytes_remaining else 0x00,
-                this_length & 0xff,
-                (this_length >> 8) & 0xff,
                 page_number & 0xff,
                 (page_number >> 8) & 0xff,
+                this_length & 0xff,
+                (this_length >> 8) & 0xff,
             ]
 
             payload = bytes(header) + image[bytes_sent:bytes_sent + this_length]
@@ -213,4 +221,12 @@ class StreamDeckGalleon100(StreamDeck):
         pass
 
     def set_key_color(self, key, r, g, b):
-        pass
+        # Confirmed from HID capture: [0x03, 0x24, key, 0x00, 0x00, R, G, B, 0x0f, ...]
+        # 0x0f byte appears to be a mode/persistence flag.
+        if min(max(key, 0), self.KEY_COUNT - 1) != key:
+            raise IndexError("Invalid key index {}.".format(key))
+
+        payload = bytearray(32)
+        payload[0:9] = [0x03, 0x24, key & 0xff, 0x00, 0x00,
+                        r & 0xff, g & 0xff, b & 0xff, 0x0f]
+        self.device.write_feature(payload)
