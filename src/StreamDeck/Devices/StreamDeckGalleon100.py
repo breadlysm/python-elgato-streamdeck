@@ -37,10 +37,8 @@ class StreamDeckGalleon100(StreamDeck):
 
     DIAL_COUNT = 2
 
-    # TODO: verify pixel dimensions via HID capture / iCUE traffic analysis.
-    # Educated guess: 96x96 JPEG matches Stream Deck Neo (also a newer device).
-    KEY_PIXEL_WIDTH = 96
-    KEY_PIXEL_HEIGHT = 96
+    KEY_PIXEL_WIDTH = 160
+    KEY_PIXEL_HEIGHT = 160
     KEY_IMAGE_FORMAT = "JPEG"
     KEY_FLIP = (False, False)
     KEY_ROTATION = 0
@@ -82,17 +80,18 @@ class StreamDeckGalleon100(StreamDeck):
 
     def reset(self):
         # TODO: verify reset feature report bytes via HID capture.
-        # [0x03, 0x02] matches Stream Deck Plus and Studio.
         payload = bytearray(32)
         payload[0:2] = [0x03, 0x02]
         self.device.write_feature(payload)
 
     def _read_control_states(self):
-        # TODO: verify total read length and byte offsets via HID capture.
-        # Layout assumption mirrors Stream Deck Plus: 1 report-id byte +
-        # event-type byte + 2 padding bytes + per-control state bytes.
-        # Adjust field offsets once real reports are captured.
-        states = self.device.read(4 + self.KEY_COUNT + self.DIAL_COUNT * 2)
+        # Packet layout (512 bytes): [report_id, event_type, pad, pad, data...]
+        # Key event (event_type=0x00): key states at bytes 4..15 (12 keys).
+        #   The device reports 13 positions (bytes 4..16); byte 16 likely maps
+        #   to the touch strip and is ignored here.
+        # Dial event (event_type=0x03): sub_type at byte 4 (0x01=turn, 0x00=push),
+        #   left dial at byte 5, right dial at byte 6.
+        states = self.device.read(512)
 
         if states is None:
             return None
@@ -101,11 +100,11 @@ class StreamDeckGalleon100(StreamDeck):
 
         event_type = states[0]
 
-        if event_type == 0x00:  # TODO: confirm key event discriminator
+        if event_type == 0x00:
             key_states = [bool(s) for s in states[3:3 + self.KEY_COUNT]]
             return {ControlType.KEY: key_states}
 
-        elif event_type == 0x03:  # TODO: confirm dial event discriminator
+        elif event_type == 0x03:
             sub_type = states[3]
             if sub_type == 0x01:
                 dial_event = DialEventType.TURN
@@ -123,8 +122,6 @@ class StreamDeckGalleon100(StreamDeck):
         return None
 
     def set_brightness(self, percent):
-        # TODO: verify brightness feature report bytes via HID capture.
-        # [0x03, 0x08, percent] matches Stream Deck Plus and Studio.
         if isinstance(percent, float):
             percent = int(100.0 * percent)
 
@@ -156,8 +153,6 @@ class StreamDeckGalleon100(StreamDeck):
             this_length = min(bytes_remaining, self._KEY_PACKET_PAYLOAD_LEN)
             bytes_sent = page_number * self._KEY_PACKET_PAYLOAD_LEN
 
-            # TODO: verify image write command byte (0x07) via HID capture.
-            # Header layout mirrors Stream Deck Plus/Studio.
             header = [
                 0x02,
                 0x07,
@@ -177,8 +172,8 @@ class StreamDeckGalleon100(StreamDeck):
             page_number += 1
 
     def set_screen_image(self, image):
-        # TODO: verify screen write command byte (0x0b matches Neo) and header
-        # layout via HID capture.
+        # TODO: verify screen write command byte (0x0b) and header layout via HID capture.
+        # TODO: verify screen dimensions (SCREEN_PIXEL_WIDTH/HEIGHT) via HID capture.
         if not image:
             image = bytes(
                 PILHelper.to_native_format(
