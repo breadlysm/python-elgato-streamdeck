@@ -9,7 +9,17 @@
 # Corsair K100 MAX RGB MK2 keyboard).
 #
 # USB VID: 0x1b1c (Corsair), PID: 0x2b18
-# Hardware: 12 keys (4 rows x 3 cols), 2 rotary dials, 1 small info screen
+# Hardware: 12 keys (4 rows x 3 cols), 2 rotary dials, segmented info display
+#
+# Display panel layout (confirmed from HID capture):
+#   Command 0x0c with 16-byte header identical to Stream Deck Plus, except
+#   the is_last byte (position 10) is always 0x00 — the device detects image
+#   completion via the JPEG FFD9 end-of-image marker.
+#
+#   Each panel: 352 × 368 px JPEG, positions confirmed:
+#     Panel 0:  x=14,  y=14
+#     Panel 1:  x=366, y=14  (= 14 + 352, tightly packed)
+#   Panel count beyond 2 is not yet confirmed via capture.
 
 from .StreamDeck import ControlType, DialEventType, StreamDeck
 from ..ImageHelpers import PILHelper
@@ -42,12 +52,17 @@ class StreamDeckGalleon100(StreamDeck):
     DECK_TYPE = "Corsair Galleon 100 SD"
     DECK_VISUAL = True
 
-    # Screen dimensions confirmed from JPEG SOF0 marker in HID capture.
+    # Per-panel screen dimensions confirmed from JPEG SOF0 and HID capture.
+    # The display has at least two 352×368 panels starting at (14,14) and (366,14).
     SCREEN_PIXEL_WIDTH = 352
     SCREEN_PIXEL_HEIGHT = 368
     SCREEN_IMAGE_FORMAT = "JPEG"
     SCREEN_FLIP = (False, False)
     SCREEN_ROTATION = 0
+
+    # Panel pixel offsets (confirmed from HID capture).
+    _PANEL_X_ORIGIN = 14
+    _PANEL_Y_ORIGIN = 14
 
     _IMG_PACKET_LEN = 1024
     _KEY_PACKET_HEADER = 8
@@ -167,11 +182,14 @@ class StreamDeckGalleon100(StreamDeck):
             bytes_remaining -= this_length
             page_number += 1
 
-    def set_screen_image(self, image):
-        # Header layout (16 bytes), confirmed from HID capture:
-        #   [0x02, 0x0c, 0x0e, 0x00, total_pages_lo, total_pages_hi,
-        #    width_lo, width_hi, height_lo, height_hi,
-        #    0x00, is_last, page_lo, page_hi, len_lo, len_hi]
+    def set_touchscreen_image(self, image, x_pos=0, y_pos=0, width=0, height=0):
+        # Header layout (16 bytes), confirmed from HID capture — identical to
+        # Stream Deck Plus (command 0x0c) except byte 10 is always 0x00 because
+        # this device detects image completion via the JPEG FFD9 end marker
+        # rather than an explicit is_last flag.
+        #
+        # [02, 0c, x_lo, x_hi, y_lo, y_hi, w_lo, w_hi, h_lo, h_hi,
+        #  00, page_lo, page_hi, len_lo, len_hi, 00]
         if not image:
             image = bytes(
                 PILHelper.to_native_format(
@@ -180,10 +198,12 @@ class StreamDeckGalleon100(StreamDeck):
                     self.SCREEN_IMAGE_FORMAT,
                 )
             )
+            x_pos = self._PANEL_X_ORIGIN
+            y_pos = self._PANEL_Y_ORIGIN
+            width = self.SCREEN_PIXEL_WIDTH
+            height = self.SCREEN_PIXEL_HEIGHT
 
         image = bytes(image)
-
-        total_pages = -(-len(image) // self._SCREEN_PACKET_PAYLOAD_LEN)  # ceil div
 
         page_number = 0
         bytes_remaining = len(image)
@@ -194,20 +214,20 @@ class StreamDeckGalleon100(StreamDeck):
             header = [
                 0x02,
                 0x0c,
-                0x0e,
+                x_pos & 0xff,
+                (x_pos >> 8) & 0xff,
+                y_pos & 0xff,
+                (y_pos >> 8) & 0xff,
+                width & 0xff,
+                (width >> 8) & 0xff,
+                height & 0xff,
+                (height >> 8) & 0xff,
                 0x00,
-                total_pages & 0xff,
-                (total_pages >> 8) & 0xff,
-                self.SCREEN_PIXEL_WIDTH & 0xff,
-                (self.SCREEN_PIXEL_WIDTH >> 8) & 0xff,
-                self.SCREEN_PIXEL_HEIGHT & 0xff,
-                (self.SCREEN_PIXEL_HEIGHT >> 8) & 0xff,
-                0x00,
-                0x01 if this_length == bytes_remaining else 0x00,
                 page_number & 0xff,
                 (page_number >> 8) & 0xff,
                 this_length & 0xff,
                 (this_length >> 8) & 0xff,
+                0x00,
             ]
 
             payload = bytes(header) + image[bytes_sent:bytes_sent + this_length]
@@ -217,12 +237,27 @@ class StreamDeckGalleon100(StreamDeck):
             bytes_remaining -= this_length
             page_number += 1
 
-    def set_touchscreen_image(self, image, x_pos=0, y_pos=0, width=0, height=0):
-        pass
+    def set_screen_image(self, image):
+        # Convenience wrapper: writes to panel 0 at its natural origin (14, 14).
+        # Call set_touchscreen_image directly with explicit x/y for other panels.
+        if not image:
+            image = bytes(
+                PILHelper.to_native_format(
+                    self,
+                    PILHelper.create_image(self, "black"),
+                    self.SCREEN_IMAGE_FORMAT,
+                )
+            )
+        self.set_touchscreen_image(
+            bytes(image),
+            x_pos=self._PANEL_X_ORIGIN,
+            y_pos=self._PANEL_Y_ORIGIN,
+            width=self.SCREEN_PIXEL_WIDTH,
+            height=self.SCREEN_PIXEL_HEIGHT,
+        )
 
     def set_key_color(self, key, r, g, b):
         # Confirmed from HID capture: [0x03, 0x24, key, 0x00, 0x00, R, G, B, 0x0f, ...]
-        # 0x0f byte appears to be a mode/persistence flag.
         if min(max(key, 0), self.KEY_COUNT - 1) != key:
             raise IndexError("Invalid key index {}.".format(key))
 
