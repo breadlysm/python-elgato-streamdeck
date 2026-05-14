@@ -61,6 +61,10 @@ class StreamDeckGalleon100(StreamDeck):
     DECK_TYPE = "Corsair Galleon 100 SD"
     DECK_VISUAL = True
 
+    # This device exposes multiple HID interfaces (MI_00 = Stream Deck panel,
+    # MI_01 = keyboard).  Only MI_00 supports feature reports; select it explicitly.
+    USB_INTERFACE_NUMBER = 0
+
     # Widget panel dimensions — each of the four visible panels is 320×160 px.
     # All four positions confirmed from HID capture (JPEG SOF0 + header bytes).
     SCREEN_PIXEL_WIDTH = 320

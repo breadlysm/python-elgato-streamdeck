@@ -122,6 +122,9 @@ class DeviceManager:
 
         for vid, pid, class_type in products:
             found_devices = self.transport.enumerate(vid=vid, pid=pid)
+            iface = getattr(class_type, 'USB_INTERFACE_NUMBER', None)
+            if iface is not None:
+                found_devices = [d for d in found_devices if d.interface_number() == iface]
             streamdecks.extend([class_type(d) for d in found_devices])
 
         return streamdecks
