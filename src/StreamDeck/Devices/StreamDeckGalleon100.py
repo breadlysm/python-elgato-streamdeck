@@ -9,26 +9,26 @@
 # Corsair K100 MAX RGB MK2 keyboard).
 #
 # USB VID: 0x1b1c (Corsair), PID: 0x2b18
-# Hardware: 12 keys (4 rows x 3 cols), 2 rotary dials, display with 4 panels
+# Hardware: 12 keys (4 rows x 3 cols), 2 rotary dials, 720×384 px display
 #
-# Display panel layout (all confirmed from HID capture):
-#   Command 0x0c with 16-byte header identical to Stream Deck Plus, except
-#   the is_last byte (position 10) is always 0x00 — the device detects image
-#   completion via the JPEG FFD9 end-of-image marker.
+# Display protocol (confirmed from Stream Deck app HID capture):
+#   The display is treated as a single 720 × 384 px JPEG written via command
+#   0x0b with a simple 8-byte header.  The app renders all four widget panels
+#   into one big image and pushes it as a unit.
 #
-#   Four widget panels (320 × 160 px JPEG each), 2×2 grid:
-#     PANEL_TOP_LEFT:     x=24,  y=24
-#     PANEL_TOP_RIGHT:    x=376, y=24
-#     PANEL_BOTTOM_LEFT:  x=24,  y=200
-#     PANEL_BOTTOM_RIGHT: x=376, y=200
+#   Header layout (8 bytes):
+#     [02, 0b, 00, is_last, len_lo, len_hi, page_lo, page_hi, JPEG_data...]
 #
-#   Background/frame writes (352 × 368 px JPEG) also observed in captures —
-#   iCUE appears to write these first to paint the full left/right display
-#   halves before overlaying widget content (see PANEL_FRAME_* constants).
+#   Image completion is signaled both by the is_last flag (byte 3 = 0x01 on
+#   the final page) and by the JPEG FFD9 end-of-image marker.
 #
-#   Header layout (16 bytes):
-#     [02, 0c, x_lo, x_hi, y_lo, y_hi, w_lo, w_hi, h_lo, h_hi,
-#      00, page_lo, page_hi, len_lo, len_hi, 00]
+# Historical note — command 0x0c (per-panel writes):
+#   Earlier captures from iCUE/Corsair Webhub showed a different protocol
+#   using command 0x0c with a 16-byte header to write individual 320×160 or
+#   352×368 panels at specific (x, y) coordinates.  Those writes are how the
+#   device renders its built-in default widgets (volume, profile, etc.) but
+#   do NOT take effect when a host application is in control.  Use 0x0b for
+#   host-controlled rendering.
 
 from .StreamDeck import ControlType, DialEventType, StreamDeck
 from ..ImageHelpers import PILHelper
@@ -65,40 +65,25 @@ class StreamDeckGalleon100(StreamDeck):
     # MI_01 = keyboard).  Only MI_00 supports feature reports; select it explicitly.
     USB_INTERFACE_NUMBER = 0
 
-    # Widget panel dimensions — each of the four visible panels is 320×160 px.
-    # All four positions confirmed from HID capture (JPEG SOF0 + header bytes).
-    SCREEN_PIXEL_WIDTH = 320
-    SCREEN_PIXEL_HEIGHT = 160
+    # Full display dimensions (confirmed from JPEG SOF0 in Stream Deck app capture).
+    SCREEN_PIXEL_WIDTH = 720
+    SCREEN_PIXEL_HEIGHT = 384
     SCREEN_IMAGE_FORMAT = "JPEG"
     SCREEN_FLIP = (False, False)
     SCREEN_ROTATION = 0
 
-    # The four widget panels arranged in a 2×2 grid (x, y, width, height).
-    # ~16 px margin between adjacent panels and from the outer frame edge.
+    # Approximate pixel regions of the four widget panels within the 720×384
+    # canvas, as rendered by the Stream Deck app.  Useful for positioning widget
+    # content when composing a full-screen image.  (x, y, width, height)
     PANEL_TOP_LEFT     = (24,  24,  320, 160)
     PANEL_TOP_RIGHT    = (376, 24,  320, 160)
     PANEL_BOTTOM_LEFT  = (24,  200, 320, 160)
     PANEL_BOTTOM_RIGHT = (376, 200, 320, 160)
 
-    # NOTE: HID captures also showed writes with cmd 0x0c at larger extents:
-    #   (x=14,  y=14, w=352, h=368) — full left half
-    #   (x=366, y=14, w=352, h=368) — full right half
-    # These appear to be background/frame writes that iCUE issues before painting
-    # widget content.  The 352×368 JPEG covered each entire display half; the
-    # 320×160 writes above are the inset widget content areas (~16 px margin all
-    # around and ~16 px gap between the two rows).  Kept here in case direct
-    # frame writes prove useful.
-    PANEL_FRAME_LEFT  = (14,  14, 352, 368)
-    PANEL_FRAME_RIGHT = (366, 14, 352, 368)
-
-    # Default panel for set_screen_image convenience wrapper.
-    _PANEL_X_ORIGIN = 24
-    _PANEL_Y_ORIGIN = 24
-
     _IMG_PACKET_LEN = 1024
     _KEY_PACKET_HEADER = 8
     _KEY_PACKET_PAYLOAD_LEN = _IMG_PACKET_LEN - _KEY_PACKET_HEADER
-    _SCREEN_PACKET_HEADER = 16
+    _SCREEN_PACKET_HEADER = 8
     _SCREEN_PACKET_PAYLOAD_LEN = _IMG_PACKET_LEN - _SCREEN_PACKET_HEADER
 
     _DIAL_EVENT_TRANSFORM = {
@@ -226,14 +211,10 @@ class StreamDeckGalleon100(StreamDeck):
             bytes_remaining -= this_length
             page_number += 1
 
-    def set_touchscreen_image(self, image, x_pos=0, y_pos=0, width=0, height=0):
-        # Header layout (16 bytes), confirmed from HID capture — identical to
-        # Stream Deck Plus (command 0x0c) except byte 10 is always 0x00 because
-        # this device detects image completion via the JPEG FFD9 end marker
-        # rather than an explicit is_last flag.
-        #
-        # [02, 0c, x_lo, x_hi, y_lo, y_hi, w_lo, w_hi, h_lo, h_hi,
-        #  00, page_lo, page_hi, len_lo, len_hi, 00]
+    def set_screen_image(self, image):
+        # Writes a full 720×384 JPEG to the display using command 0x0b.
+        # Header layout (8 bytes), confirmed from Stream Deck app HID capture:
+        #   [02, 0b, 00, is_last, len_lo, len_hi, page_lo, page_hi, JPEG_data...]
         if not image:
             image = bytes(
                 PILHelper.to_native_format(
@@ -242,10 +223,6 @@ class StreamDeckGalleon100(StreamDeck):
                     self.SCREEN_IMAGE_FORMAT,
                 )
             )
-            x_pos = self._PANEL_X_ORIGIN
-            y_pos = self._PANEL_Y_ORIGIN
-            width = self.SCREEN_PIXEL_WIDTH
-            height = self.SCREEN_PIXEL_HEIGHT
 
         image = bytes(image)
 
@@ -254,24 +231,17 @@ class StreamDeckGalleon100(StreamDeck):
         while bytes_remaining > 0:
             this_length = min(bytes_remaining, self._SCREEN_PACKET_PAYLOAD_LEN)
             bytes_sent = page_number * self._SCREEN_PACKET_PAYLOAD_LEN
+            is_last = 1 if this_length == bytes_remaining else 0
 
             header = [
                 0x02,
-                0x0c,
-                x_pos & 0xff,
-                (x_pos >> 8) & 0xff,
-                y_pos & 0xff,
-                (y_pos >> 8) & 0xff,
-                width & 0xff,
-                (width >> 8) & 0xff,
-                height & 0xff,
-                (height >> 8) & 0xff,
+                0x0b,
                 0x00,
-                page_number & 0xff,
-                (page_number >> 8) & 0xff,
+                is_last,
                 this_length & 0xff,
                 (this_length >> 8) & 0xff,
-                0x00,
+                page_number & 0xff,
+                (page_number >> 8) & 0xff,
             ]
 
             payload = bytes(header) + image[bytes_sent:bytes_sent + this_length]
@@ -281,31 +251,9 @@ class StreamDeckGalleon100(StreamDeck):
             bytes_remaining -= this_length
             page_number += 1
 
-    def set_screen_image(self, image, panel=None):
-        # Convenience wrapper targeting a specific panel by position tuple
-        # (x_pos, y_pos, width, height).  Defaults to PANEL_LARGE_LEFT.
-        # Use the PANEL_* class constants to target a specific panel:
-        #   set_screen_image(img, panel=StreamDeckGalleon100.PANEL_LARGE_RIGHT)
-        if panel is None:
-            panel = self.PANEL_TOP_LEFT
-
-        x_pos, y_pos, width, height = panel
-
-        if not image:
-            image = bytes(
-                PILHelper.to_native_format(
-                    self,
-                    PILHelper.create_image(self, "black"),
-                    self.SCREEN_IMAGE_FORMAT,
-                )
-            )
-        self.set_touchscreen_image(
-            bytes(image),
-            x_pos=x_pos,
-            y_pos=y_pos,
-            width=width,
-            height=height,
-        )
+    # Alias for compatibility with the StreamDeckPlus / touchscreen API.
+    def set_touchscreen_image(self, image, x_pos=0, y_pos=0, width=0, height=0):
+        self.set_screen_image(image)
 
     def set_key_color(self, key, r, g, b):
         # Confirmed from HID capture: [0x03, 0x24, key, 0x00, 0x00, R, G, B, 0x0f, ...]
