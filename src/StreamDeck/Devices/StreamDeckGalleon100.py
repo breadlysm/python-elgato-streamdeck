@@ -109,9 +109,9 @@ class StreamDeckGalleon100(StreamDeck):
         )
 
     def _reset_key_stream(self):
-        payload = bytearray(self._IMG_PACKET_LEN)
-        payload[0] = 0x02
-        self.device.write(payload)
+        # Not confirmed from capture; this device uses JPEG FFD9 end-of-image
+        # detection rather than an explicit stream reset, so this is a no-op.
+        pass
 
     def reset(self):
         payload = bytearray(32)
