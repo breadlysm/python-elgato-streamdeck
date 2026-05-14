@@ -49,10 +49,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 # Directory containing the PNG icon files (update for your system).
-ICONS_DIR = os.environ.get(
+ICONS_DIR = os.path.expanduser(os.environ.get(
     "SHIELD_ICONS_DIR",
     r"C:\Users\jbrad\Downloads\Icons\streamdeck_shield_icons_12_separate_pngs",
-)
+))
 
 # Home Assistant connection.
 HA_URL = os.environ.get("HA_URL", "http://homeassistant.local:8123")
@@ -176,6 +176,9 @@ def main():
     galleon.set_brightness(70)
 
     print(f"Connected: {galleon.DECK_TYPE}  —  {galleon.KEY_COUNT} keys")
+    print(f"Icons dir: {ICONS_DIR}")
+    if not os.path.isdir(ICONS_DIR):
+        print(f"  WARNING: icons directory does not exist — falling back to text-only tiles.")
     if not HA_ENABLED:
         print("Home Assistant integration disabled (no HA_TOKEN).  Commands will be printed only.")
     if requests is None:
@@ -185,6 +188,9 @@ def main():
     key_images: list[bytes] = []
     for label, icon_file, _ in KEY_LAYOUT:
         icon_path = os.path.join(ICONS_DIR, icon_file) if icon_file else None
+        if icon_path and not os.path.isfile(icon_path):
+            print(f"  missing icon: {icon_path}")
+            icon_path = None
         img = _render_key_image(galleon, label, icon_path)
         key_images.append(img)
 
