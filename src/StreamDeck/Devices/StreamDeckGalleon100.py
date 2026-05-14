@@ -30,6 +30,9 @@
 #   do NOT take effect when a host application is in control.  Use 0x0b for
 #   host-controlled rendering.
 
+import threading
+import time
+
 from .StreamDeck import ControlType, DialEventType, StreamDeck
 from ..ImageHelpers import PILHelper
 
@@ -91,16 +94,48 @@ class StreamDeckGalleon100(StreamDeck):
         DialEventType.PUSH: bool,
     }
 
+    # Heartbeat interval (seconds).  The device firmware reverts to its built-in
+    # keyboard pages if the host stops sending command 0x25 — observed timeout
+    # is ~2-3 seconds, so we ping every 500ms to match the Stream Deck app.
+    _HEARTBEAT_INTERVAL = 0.5
+
     def __init__(self, device):
         super().__init__(device)
         self.BLANK_KEY_IMAGE = PILHelper.to_native_key_format(
             self, PILHelper.create_key_image(self, "black")
         )
+        self._heartbeat_thread = None
+        self._heartbeat_stop = threading.Event()
 
     def _reset_key_stream(self):
         # Not confirmed from capture; this device uses JPEG FFD9 end-of-image
         # detection rather than an explicit stream reset, so this is a no-op.
         pass
+
+    def _heartbeat_loop(self):
+        payload = bytearray(self._IMG_PACKET_LEN)
+        payload[0:2] = [0x02, 0x25]
+        while not self._heartbeat_stop.is_set():
+            try:
+                self.device.write(payload)
+            except Exception:
+                break
+            self._heartbeat_stop.wait(self._HEARTBEAT_INTERVAL)
+
+    def open(self):
+        super().open()
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, daemon=True
+        )
+        self._heartbeat_thread.start()
+
+    def close(self):
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=1)
+            self._heartbeat_thread = None
+        super().close()
 
     def reset(self):
         payload = bytearray(32)
@@ -167,10 +202,11 @@ class StreamDeckGalleon100(StreamDeck):
 
     def get_serial_number(self):
         # Write command 0x27 via SET_REPORT, then read response via GET_REPORT.
+        # The capture showed the response is 60 bytes long, not 32.
         request = bytearray(32)
         request[0:2] = [0x03, 0x27]
         self.device.write_feature(request)
-        serial = self.device.read_feature(0x03, 32)
+        serial = self.device.read_feature(0x03, 60)
         return self._extract_string(serial[2:])
 
     def get_firmware_version(self):
@@ -178,7 +214,7 @@ class StreamDeckGalleon100(StreamDeck):
         request = bytearray(32)
         request[0:6] = [0x03, 0x05, 0x00, 0x00, 0x00, 0x02]
         self.device.write_feature(request)
-        version = self.device.read_feature(0x03, 32)
+        version = self.device.read_feature(0x03, 60)
         return self._extract_string(version[6:])
 
     def set_key_image(self, key, image):
