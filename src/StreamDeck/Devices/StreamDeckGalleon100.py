@@ -9,17 +9,24 @@
 # Corsair K100 MAX RGB MK2 keyboard).
 #
 # USB VID: 0x1b1c (Corsair), PID: 0x2b18
-# Hardware: 12 keys (4 rows x 3 cols), 2 rotary dials, segmented info display
+# Hardware: 12 keys (4 rows x 3 cols), 2 rotary dials, display with 4 panels
 #
-# Display panel layout (confirmed from HID capture):
+# Display panel layout (all confirmed from HID capture):
 #   Command 0x0c with 16-byte header identical to Stream Deck Plus, except
 #   the is_last byte (position 10) is always 0x00 — the device detects image
 #   completion via the JPEG FFD9 end-of-image marker.
 #
-#   Each panel: 352 × 368 px JPEG, positions confirmed:
-#     Panel 0:  x=14,  y=14
-#     Panel 1:  x=366, y=14  (= 14 + 352, tightly packed)
-#   Panel count beyond 2 is not yet confirmed via capture.
+#   Large panels (352 × 368 px JPEG):
+#     PANEL_LARGE_LEFT:   x=14,  y=14
+#     PANEL_LARGE_RIGHT:  x=366, y=14
+#
+#   Small panels (320 × 160 px JPEG):
+#     PANEL_SMALL_LEFT:   x=24,  y=24
+#     PANEL_SMALL_RIGHT:  x=376, y=24
+#
+#   Header layout (16 bytes):
+#     [02, 0c, x_lo, x_hi, y_lo, y_hi, w_lo, w_hi, h_lo, h_hi,
+#      00, page_lo, page_hi, len_lo, len_hi, 00]
 
 from .StreamDeck import ControlType, DialEventType, StreamDeck
 from ..ImageHelpers import PILHelper
@@ -52,15 +59,26 @@ class StreamDeckGalleon100(StreamDeck):
     DECK_TYPE = "Corsair Galleon 100 SD"
     DECK_VISUAL = True
 
-    # Per-panel screen dimensions confirmed from JPEG SOF0 and HID capture.
-    # The display has at least two 352×368 panels starting at (14,14) and (366,14).
+    # Large panel dimensions (confirmed from JPEG SOF0 and HID capture).
     SCREEN_PIXEL_WIDTH = 352
     SCREEN_PIXEL_HEIGHT = 368
     SCREEN_IMAGE_FORMAT = "JPEG"
     SCREEN_FLIP = (False, False)
     SCREEN_ROTATION = 0
 
-    # Panel pixel offsets (confirmed from HID capture).
+    # Small panel dimensions (confirmed from JPEG SOF0 and HID capture).
+    SCREEN_SMALL_PIXEL_WIDTH = 320
+    SCREEN_SMALL_PIXEL_HEIGHT = 160
+
+    # Panel pixel offsets (all confirmed from HID capture).
+    # Large panels (352×368):
+    PANEL_LARGE_LEFT = (14, 14, 352, 368)
+    PANEL_LARGE_RIGHT = (366, 14, 352, 368)
+    # Small panels (320×160):
+    PANEL_SMALL_LEFT = (24, 24, 320, 160)
+    PANEL_SMALL_RIGHT = (376, 24, 320, 160)
+
+    # Default panel origin for set_screen_image convenience wrapper.
     _PANEL_X_ORIGIN = 14
     _PANEL_Y_ORIGIN = 14
 
@@ -237,9 +255,16 @@ class StreamDeckGalleon100(StreamDeck):
             bytes_remaining -= this_length
             page_number += 1
 
-    def set_screen_image(self, image):
-        # Convenience wrapper: writes to panel 0 at its natural origin (14, 14).
-        # Call set_touchscreen_image directly with explicit x/y for other panels.
+    def set_screen_image(self, image, panel=None):
+        # Convenience wrapper targeting a specific panel by position tuple
+        # (x_pos, y_pos, width, height).  Defaults to PANEL_LARGE_LEFT.
+        # Use the PANEL_* class constants to target a specific panel:
+        #   set_screen_image(img, panel=StreamDeckGalleon100.PANEL_LARGE_RIGHT)
+        if panel is None:
+            panel = self.PANEL_LARGE_LEFT
+
+        x_pos, y_pos, width, height = panel
+
         if not image:
             image = bytes(
                 PILHelper.to_native_format(
@@ -250,10 +275,10 @@ class StreamDeckGalleon100(StreamDeck):
             )
         self.set_touchscreen_image(
             bytes(image),
-            x_pos=self._PANEL_X_ORIGIN,
-            y_pos=self._PANEL_Y_ORIGIN,
-            width=self.SCREEN_PIXEL_WIDTH,
-            height=self.SCREEN_PIXEL_HEIGHT,
+            x_pos=x_pos,
+            y_pos=y_pos,
+            width=width,
+            height=height,
         )
 
     def set_key_color(self, key, r, g, b):
