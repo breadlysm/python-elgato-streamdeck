@@ -201,8 +201,11 @@ class StreamDeckGalleon100(StreamDeck):
         self.device.write_feature(payload)
 
     def get_serial_number(self):
-        # Write command 0x27 via SET_REPORT, then read response via GET_REPORT.
-        # The capture showed the response is 60 bytes long, not 32.
+        # The SET_REPORT 0x27 request is accepted by the device but the
+        # synchronous GET_REPORT response comes back empty.  The Stream Deck
+        # app appears to receive the actual serial via interrupt-IN events
+        # (0x0d / 0x0e on alternate endpoints), which the transport layer
+        # doesn't currently poll.  Returns an empty string for now.
         request = bytearray(32)
         request[0:2] = [0x03, 0x27]
         self.device.write_feature(request)
@@ -210,7 +213,7 @@ class StreamDeckGalleon100(StreamDeck):
         return self._extract_string(serial[2:])
 
     def get_firmware_version(self):
-        # Write command 0x05 via SET_REPORT, then read response via GET_REPORT.
+        # See note on get_serial_number — same caveat applies.
         request = bytearray(32)
         request[0:6] = [0x03, 0x05, 0x00, 0x00, 0x00, 0x02]
         self.device.write_feature(request)
