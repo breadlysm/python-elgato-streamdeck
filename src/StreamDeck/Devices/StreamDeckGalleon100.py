@@ -16,13 +16,15 @@
 #   the is_last byte (position 10) is always 0x00 — the device detects image
 #   completion via the JPEG FFD9 end-of-image marker.
 #
-#   Large panels (352 × 368 px JPEG):
-#     PANEL_LARGE_LEFT:   x=14,  y=14
-#     PANEL_LARGE_RIGHT:  x=366, y=14
+#   Four widget panels (320 × 160 px JPEG each), 2×2 grid:
+#     PANEL_TOP_LEFT:     x=24,  y=24
+#     PANEL_TOP_RIGHT:    x=376, y=24
+#     PANEL_BOTTOM_LEFT:  x=24,  y=200
+#     PANEL_BOTTOM_RIGHT: x=376, y=200
 #
-#   Small panels (320 × 160 px JPEG):
-#     PANEL_SMALL_LEFT:   x=24,  y=24
-#     PANEL_SMALL_RIGHT:  x=376, y=24
+#   Background/frame writes (352 × 368 px JPEG) also observed in captures —
+#   iCUE appears to write these first to paint the full left/right display
+#   halves before overlaying widget content (see PANEL_FRAME_* constants).
 #
 #   Header layout (16 bytes):
 #     [02, 0c, x_lo, x_hi, y_lo, y_hi, w_lo, w_hi, h_lo, h_hi,
@@ -59,28 +61,35 @@ class StreamDeckGalleon100(StreamDeck):
     DECK_TYPE = "Corsair Galleon 100 SD"
     DECK_VISUAL = True
 
-    # Large panel dimensions (confirmed from JPEG SOF0 and HID capture).
-    SCREEN_PIXEL_WIDTH = 352
-    SCREEN_PIXEL_HEIGHT = 368
+    # Widget panel dimensions — each of the four visible panels is 320×160 px.
+    # All four positions confirmed from HID capture (JPEG SOF0 + header bytes).
+    SCREEN_PIXEL_WIDTH = 320
+    SCREEN_PIXEL_HEIGHT = 160
     SCREEN_IMAGE_FORMAT = "JPEG"
     SCREEN_FLIP = (False, False)
     SCREEN_ROTATION = 0
 
-    # Small panel dimensions (confirmed from JPEG SOF0 and HID capture).
-    SCREEN_SMALL_PIXEL_WIDTH = 320
-    SCREEN_SMALL_PIXEL_HEIGHT = 160
+    # The four widget panels arranged in a 2×2 grid (x, y, width, height).
+    # ~16 px margin between adjacent panels and from the outer frame edge.
+    PANEL_TOP_LEFT     = (24,  24,  320, 160)
+    PANEL_TOP_RIGHT    = (376, 24,  320, 160)
+    PANEL_BOTTOM_LEFT  = (24,  200, 320, 160)
+    PANEL_BOTTOM_RIGHT = (376, 200, 320, 160)
 
-    # Panel pixel offsets (all confirmed from HID capture).
-    # Large panels (352×368):
-    PANEL_LARGE_LEFT = (14, 14, 352, 368)
-    PANEL_LARGE_RIGHT = (366, 14, 352, 368)
-    # Small panels (320×160):
-    PANEL_SMALL_LEFT = (24, 24, 320, 160)
-    PANEL_SMALL_RIGHT = (376, 24, 320, 160)
+    # NOTE: HID captures also showed writes with cmd 0x0c at larger extents:
+    #   (x=14,  y=14, w=352, h=368) — full left half
+    #   (x=366, y=14, w=352, h=368) — full right half
+    # These appear to be background/frame writes that iCUE issues before painting
+    # widget content.  The 352×368 JPEG covered each entire display half; the
+    # 320×160 writes above are the inset widget content areas (~16 px margin all
+    # around and ~16 px gap between the two rows).  Kept here in case direct
+    # frame writes prove useful.
+    PANEL_FRAME_LEFT  = (14,  14, 352, 368)
+    PANEL_FRAME_RIGHT = (366, 14, 352, 368)
 
-    # Default panel origin for set_screen_image convenience wrapper.
-    _PANEL_X_ORIGIN = 14
-    _PANEL_Y_ORIGIN = 14
+    # Default panel for set_screen_image convenience wrapper.
+    _PANEL_X_ORIGIN = 24
+    _PANEL_Y_ORIGIN = 24
 
     _IMG_PACKET_LEN = 1024
     _KEY_PACKET_HEADER = 8
@@ -261,7 +270,7 @@ class StreamDeckGalleon100(StreamDeck):
         # Use the PANEL_* class constants to target a specific panel:
         #   set_screen_image(img, panel=StreamDeckGalleon100.PANEL_LARGE_RIGHT)
         if panel is None:
-            panel = self.PANEL_LARGE_LEFT
+            panel = self.PANEL_TOP_LEFT
 
         x_pos, y_pos, width, height = panel
 
