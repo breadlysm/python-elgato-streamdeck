@@ -123,10 +123,23 @@ class StreamDeckGalleon100(StreamDeck):
         self.device.write_feature(payload)
 
     def _read_control_states(self):
-        # Packet layout (512 bytes): [report_id, event_type, pad, pad, data...]
-        # Key event (event_type=0x00): key states at bytes 3..14 (12 keys).
-        # Dial event (event_type=0x03): sub_type at byte 3 (0x01=turn, 0x00=push),
-        #   left dial at byte 4, right dial at byte 5.
+        # Two distinct event formats are observed on MI_00:
+        #
+        # Format A — custom/blank page (event_type=0x00):
+        #   [report_id, 0x00, 0x0c, 0x00, key0, key1, ..., key11, ...]
+        #   Key states are bytes 3..14 (12 keys, 1=pressed, 0=released).
+        #   This is the format handled below and matches the standard Stream Deck
+        #   protocol.
+        #
+        # Format B — default Corsair keyboard page (event_type=0x20):
+        #   [report_id, 0x20, 0x0c, 0x00, 0x02, col, brightness, toggleA, ...]
+        #   This is a device-state broadcast (brightness %, profile color, toggle
+        #   states) sent after built-in keyboard actions fire.  These keys are
+        #   handled entirely by the keyboard firmware; the library ignores them.
+        #
+        # Dial events (event_type=0x03) have not yet been confirmed from a capture
+        # on a blank page — the implementation below mirrors the Stream Deck Plus
+        # protocol and should be verified.
         states = self.device.read(512)
 
         if states is None:
