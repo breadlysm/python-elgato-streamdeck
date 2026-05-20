@@ -12,6 +12,7 @@ class USBVendorIDs:
     """
 
     USB_VID_ELGATO = 0x0fd9
+    USB_VID_CORSAIR = 0x1b1c
 
 
 class USBProductIDs:
@@ -36,3 +37,6 @@ class USBProductIDs:
     USB_PID_STREAMDECK_XL_V2 = 0x008f
     USB_PID_STREAMDECK_STUDIO = 0x00aa
     USB_PID_STREAMDECK_XL_V2_MODULE = 0x00ba
+
+    # Corsair devices (VID 0x1b1c)
+    USB_PID_GALLEON_100_SD = 0x2b18
